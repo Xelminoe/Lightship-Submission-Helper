@@ -72,12 +72,15 @@
     // Send nomination as a POST request to the Google Apps Script URL
     function uploadNomination(nomination, scriptUrl) {
         const formData = new FormData();
+        let rawStatus = (nomination.state || "").toLowerCase();
+        let mappedStatus = rawStatus === "live" ? "lightship-live" : rawStatus;
+
         formData.append("id", nomination.id);
         formData.append("title", nomination.title || "");
         formData.append("description", nomination.description || "");
         formData.append("lat", nomination.lat);
         formData.append("lng", nomination.lng);
-        formData.append("status", (nomination.state || "").toLowerCase());
+        formData.append("status", mappedStatus);
         formData.append("candidateimageurl", nomination.images?.[0]?.url || "");
         formData.append("nickname", getUserEmail() || "lightship");
         formData.append("submitteddate", formatTimestamp(nomination.discoveredTimestampMs));
