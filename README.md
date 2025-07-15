@@ -2,6 +2,6 @@
 
 ## Lightship-Exporter
 
-The lightship-exporter plugin allows users to export Lightship (Niantic Wayfarer) location data and integrate it with the [Wayfarer Planner](https://gitlab.com/NvlblNm/wayfarer) for better visualization and planning on the map.
+The lightship-exporter plugin allows users to export Lightship (Niantic Spatial) location data and integrate it with the [Wayfarer Planner](https://gitlab.com/NvlblNm/wayfarer) for better visualization and planning on the map.
 
 After setting up the corresponding Wayfarer Planner web app, simply import its URL into lightship-exporter.
