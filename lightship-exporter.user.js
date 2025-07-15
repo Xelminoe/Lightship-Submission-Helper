@@ -1,5 +1,6 @@
 // ==UserScript==
 // @name         Lightship Exporter
+// @author       Xelminoe
 // @version      1.0.0
 // @description  Export Lightship nominations to Google Sheet (Wayfarer Exporter style)
 // @match        https://lightship.dev/account/geospatial-browser/*
@@ -10,7 +11,7 @@
     "use strict";
     const STORAGE_KEY = "lightshipexporter-candidates";
 
-    // Load previously synced nominations from localStorage
+    // Load nomination upload records from localStorage
     function loadStoredCandidates() {
         try {
             return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {};
@@ -24,14 +25,14 @@
         localStorage.setItem(STORAGE_KEY, JSON.stringify(candidates));
     }
 
-    // Try to extract nomination data from the React Fiber tree
+    // Attempt to extract nomination data from the React Fiber tree
     function extractNominationsFromFiber() {
         const table = document.querySelector("table");
         if (!table) return [];
 
         let fiberNode = null;
 
-        // Find the React fiber object attached to the table element
+        // Locate the internal React fiber object attached to the DOM element
         for (const key in table) {
             if (key.startsWith("__reactFiber$")) {
                 fiberNode = table[key];
@@ -43,7 +44,7 @@
 
         let cursor = fiberNode;
 
-        // Traverse up the fiber tree to find the component that holds submissionPois
+        // Traverse fiber tree upwards to find props or state containing nominations
         while (cursor) {
             const props = cursor.memoizedProps;
             const state = cursor.memoizedState;
@@ -61,13 +62,14 @@
         return [];
     }
 
+    // Extract the user's email from the page (used as nickname)
     function getUserEmail() {
         const btn = document.querySelector('button.account-menu-dropdown');
         if (!btn) return "";
         return btn.textContent.trim();
     }
 
-    // Send a nomination as a POST request to Google Apps Script
+    // Send nomination as a POST request to the Google Apps Script URL
     function uploadNomination(nomination, scriptUrl) {
         const formData = new FormData();
         formData.append("id", nomination.id);
@@ -86,39 +88,32 @@
         });
     }
 
+    // Synchronize nominations that are either new or have changed status
     async function syncNewNominations(scriptUrl) {
         const stored = loadStoredCandidates();
         const nominations = extractNominationsFromFiber();
 
         if (!nominations || nominations.length === 0) {
-            alert("⚠️ 未找到可上传的提名项！");
+            alert("⚠️ No nominations found to upload.");
             return;
         }
 
         const nominationsToUpload = [];
-        const pendingNominations = [];// 👈 保存详细标注，用于后续展示
+        const pendingNominations = []; // Used for preview display
         window.pendingNominationsToUpload = pendingNominations;
 
         for (const n of nominations) {
             const prev = stored[n.id];
             const currentStatus = (n.state || "").toLowerCase();
-            const reason = !prev
-            ? "new"
-            : (prev.status !== currentStatus ? "status changed" : null);
+            const reason = !prev ? "new" : (prev.status !== currentStatus ? "status changed" : null);
 
             if (reason) {
                 nominationsToUpload.push(n);
-                pendingNominations.push({
-                    id: n.id,
-                    title: n.title,
-                    reason: reason,
-                });
+                pendingNominations.push({ id: n.id, title: n.title, reason });
             }
         }
 
         let synced = 0;
-
-        // 控制并发批量上传
         const batchSize = 5;
 
         for (let i = 0; i < nominationsToUpload.length; i += batchSize) {
@@ -146,20 +141,20 @@
         setTimeout(() => updateSyncStatus("Ready."), 3000);
     }
 
+    // Convert millisecond timestamp to YYYY-MM-DD string
     function formatTimestamp(msString) {
         if (!msString) return "";
         const date = new Date(parseInt(msString, 10));
-        return date.toISOString().split("T")[0]; // → "YYYY-MM-DD"
+        return date.toISOString().split("T")[0];
     }
 
+    // Update status message in the sync panel UI
     function updateSyncStatus(msg) {
         const el = document.querySelector('#sync-status-msg');
         if (el) el.textContent = msg;
     }
 
-
     function createFloatingSyncPanel(onSyncClick) {
-        // 避免重复添加
         if (document.querySelector('#lightship-sync-panel')) return;
 
         const panel = document.createElement('div');
@@ -233,12 +228,13 @@
             if (syncBtn.disabled) return;
 
             const url = urlInput.value.trim();
-            if (!url) return alert("❗ 请填写 Script URL");
+            if (!url) return alert("❗ Please fill the Script URL");
             localStorage.setItem("lightshipexporter-script-url", url);
 
             await syncNewNominations(url);
         };
 
+        // Clear cache button click
         const clearBtn = document.querySelector('#clear-cache-btn');
         clearBtn.onclick = () => {
             if (confirm("Are you sure you want to clear the upload cache?")) {
@@ -247,7 +243,7 @@
             }
         };
 
-        // 💾 下载缓存
+        // Download cache button click
         const downloadBtn = panel.querySelector('#download-cache-btn');
         downloadBtn.onclick = () => {
             const data = localStorage.getItem(STORAGE_KEY) || "{}";
@@ -260,7 +256,7 @@
             URL.revokeObjectURL(url);
         };
 
-        // 📥 上传缓存
+        // Upload cache button click
         const fileInput = panel.querySelector('#upload-cache-input');
         const uploadBtn = panel.querySelector('#upload-cache-btn');
 
@@ -287,6 +283,7 @@
             reader.readAsText(file);
         };
 
+        // Preview button click
         const previewBtn = panel.querySelector('#preview-upload-btn');
         previewBtn.onclick = () => {
             const list = window.pendingNominationsToUpload || [];
@@ -308,16 +305,17 @@
     }
 
 
+    // Initialization watcher for when the submissions tab becomes active
     function waitForSubmissionsTabActivationThenInsertButton() {
         const tryAttach = () => {
             const tab = document.querySelector('#tab-submissions');
             if (!tab) {
                 console.warn("Waiting for submissions tab...");
-                setTimeout(tryAttach, 1000); // 延迟重试
+                setTimeout(tryAttach, 1000);
                 return;
             }
 
-            const uiPanel = createFloatingSyncPanel(); // 插入 UI
+            const uiPanel = createFloatingSyncPanel();
             const observer = new MutationObserver(() => {
                 try {
                     const isActive = tab.getAttribute('aria-selected') === 'true';
@@ -335,7 +333,6 @@
                 attributeFilter: ['aria-selected'],
             });
 
-            // 初始状态检查
             const isActive = tab.getAttribute('aria-selected') === 'true';
             uiPanel.setStatus(
                 isActive ? "✅ Submissions tab is active." : "📄 Switch to Submissions tab to enable sync.",
@@ -343,7 +340,7 @@
             );
         };
 
-        setTimeout(tryAttach, 1000); // 初始延迟，避免干扰首屏渲染
+        setTimeout(tryAttach, 1000);
     }
 
     waitForSubmissionsTabActivationThenInsertButton();
