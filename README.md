@@ -1,5 +1,7 @@
 # Spatial-Nomination-Helper
 
-This is an unofficial fork of the [Wayfarer Planner](https://gitlab.com/NvlblNm/wayfarer) originally hosted on GitLab.
+## Lightship-Exporter
 
-Purpose: customization for users of Niantic Spatial services.
+The lightship-exporter plugin allows users to export Lightship (Niantic Wayfarer) location data and integrate it with the [Wayfarer Planner](https://gitlab.com/NvlblNm/wayfarer) for better visualization and planning on the map.
+
+After setting up the corresponding Wayfarer Planner web app, simply import its URL into lightship-exporter.
