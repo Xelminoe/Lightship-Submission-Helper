@@ -1,13 +1,25 @@
 // ==UserScript==
 // @name         Lightship Exporter
 // @author       Xelminoe
-// @version      1.0.0
+// @version      1.0.1
 // @description  Export Lightship nominations to Google Sheet (Wayfarer Exporter style)
 // @match        https://lightship.dev/account/geospatial-browser/*
 // @grant        none
 // ==/UserScript==
 
 (function () {
+    function getDistance(p1, p2) {
+        const rad = (x) => (x * Math.PI) / 180;
+        const R = 6378137; // Earth radius in meters
+        const dLat = rad(p2.lat - p1.lat);
+        const dLng = rad(p2.lng - p1.lng);
+        const a =
+              Math.sin(dLat / 2) ** 2 +
+              Math.cos(rad(p1.lat)) * Math.cos(rad(p2.lat)) * Math.sin(dLng / 2) ** 2;
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        return R * c;
+    }
+
     "use strict";
     const STORAGE_KEY = "lightshipexporter-candidates";
 
@@ -20,9 +32,37 @@
         }
     }
 
-    // Save updated nomination records to localStorage
-    function saveStoredCandidates(candidates) {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(candidates));
+    async function fetchCandidatesFromScript(scriptUrl) {
+        try {
+            const response = await fetch(scriptUrl);
+            const data = await response.json();
+
+            const allowedStatuses = ["lightship-live", "provisional", "retired","potential"];
+
+            const mapped = {};
+            for (const c of data) {
+                if (!allowedStatuses.includes(c.status)) continue;
+
+                let mappedStatus = c.status === "lightship-live" ? "live" : c.status;
+
+                mapped[c.id] = {
+                    title: c.title,
+                    description: c.description,
+                    lat: c.lat,
+                    lng: c.lng,
+                    status: mappedStatus,
+                };
+            }
+
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(mapped));
+
+            updateSyncStatus(`✅ Downloaded ${Object.keys(mapped).length} candidates from script.`);
+            return mapped;
+        } catch (e) {
+            console.error("❌ Failed to load candidates from script:", e);
+            updateSyncStatus("❌ Failed to load candidates from script.");
+            return null;
+        }
     }
 
     // Attempt to extract nomination data from the React Fiber tree
@@ -95,6 +135,7 @@
     async function syncNewNominations(scriptUrl) {
         const stored = loadStoredCandidates();
         const nominations = extractNominationsFromFiber();
+        const potentialMatches = {}; // newNomination.id → array of matched potentials
 
         if (!nominations || nominations.length === 0) {
             alert("⚠️ No nominations found to upload.");
@@ -112,8 +153,34 @@
 
             if (reason) {
                 nominationsToUpload.push(n);
-                pendingNominations.push({ id: n.id, title: n.title, reason });
+                const record = { id: n.id, title: n.title, reason };
+                if (reason === "status changed") {
+                    record.oldStatus = prev.status;
+                    record.newStatus = currentStatus;
+                }
+                pendingNominations.push(record);
             }
+
+            if (!prev) {
+                const matches = [];
+                for (const [id, candidate] of Object.entries(stored)) {
+                    if (candidate.status === "potential") {
+                        const distance = getDistance(candidate, n);
+                        if (distance <= 5) {
+                            matches.push({ id, ...candidate });
+                        }
+                    }
+                }
+                if (matches.length > 0) {
+                    potentialMatches[n.id] = matches;
+                }
+            }
+        }
+
+        let confirmedMatches = [];
+        if (Object.keys(potentialMatches).length > 0) {
+            confirmedMatches = await showPotentialMatchUI(potentialMatches, nominations);
+            window.confirmedPotentialMatches = confirmedMatches;
         }
 
         let synced = 0;
@@ -128,11 +195,14 @@
                     updateSyncStatus(`📤 Uploading ${i + index + 1} / ${nominationsToUpload.length}: ${n.title}`);
                     await uploadNomination(n, scriptUrl);
 
-                    stored[n.id] = {
-                        title: n.title,
-                        status: currentStatus,
-                    };
-                    saveStoredCandidates(stored);
+                    if (confirmedMatches.length > 0) {
+                        const relatedDeletes = confirmedMatches.filter(m => m.newNominationId === n.id);
+                        for (const match of relatedDeletes) {
+                            delete stored[match.potentialId];
+                            sendDeleteToWeb(match.potentialId);
+                        }
+                    }
+
                     synced++;
                 } catch (e) {
                     console.error(`❌ Failed to upload: ${n.title}`, e);
@@ -142,6 +212,20 @@
 
         updateSyncStatus(`✅ Upload complete. ${synced} nomination(s) uploaded.`);
         setTimeout(() => updateSyncStatus("Ready."), 3000);
+    }
+
+    function sendDeleteToWeb(potentialId) {
+        const formData = new FormData();
+        formData.append("status", "delete");
+        formData.append("id", potentialId);
+
+        const scriptUrl = localStorage.getItem("lightshipexporter-script-url");
+        if (scriptUrl) {
+            fetch(scriptUrl, {
+                method: "POST",
+                body: formData,
+            }).catch((e) => console.error("Failed to send delete", e));
+        }
     }
 
     // Convert millisecond timestamp to YYYY-MM-DD string
@@ -187,22 +271,12 @@
             </div>
             <div id="sync-status-msg" style="margin: 8px 0; color: gray;">🔄 Waiting for Submissions tab…</div>
                 <button id="start-sync-btn"
-                        title="Upload all new or changed nominations compared with local cache to Google Sheet"
+                        title="Upload all new or changed nominations to Google Sheet"
                         style="width: 100%; padding: 8px; background-color: #4CAF50; color: white; border: none; border-radius: 5px; margin-top: 5px;"
                         disabled>📤 Sync Submissions</button>
                 <button id="preview-upload-btn"
                         title="Preview the nominations that will be uploaded (if ready)"
                         style="width: 100%; padding: 8px; margin-top: 5px;">🔍 Preview Uploads</button>
-                <button id="clear-cache-btn"
-                        title="Clear local upload record; after this, all nominations will be re-uploaded"
-                        style="width: 100%; padding: 8px; background-color: #f44336; color: white; border: none; border-radius: 5px; margin-top: 5px;">🧹 Clear Local Cache</button>
-                <button id="download-cache-btn"
-                        title="Download current local cache as JSON file"
-                        style="width: 100%; padding: 8px; margin-top: 5px;">💾 Download Cache</button>
-                <input type="file" id="upload-cache-input" style="display: none;" />
-                <button id="upload-cache-btn"
-                        title="Import JSON cache and replace existing local records"
-                        style="width: 100%; padding: 8px; margin-top: 5px;">📥 Import and Replace Current Cache</button>
         </div>
     `;
 
@@ -234,69 +308,34 @@
             if (!url) return alert("❗ Please fill the Script URL");
             localStorage.setItem("lightshipexporter-script-url", url);
 
+            updateSyncStatus("🔄 Downloading latest candidates from script...");
+            const scriptCandidates = await fetchCandidatesFromScript(url);
+            if (!scriptCandidates) return; // Halt if fail to download
+
             await syncNewNominations(url);
-        };
-
-        // Clear cache button click
-        const clearBtn = document.querySelector('#clear-cache-btn');
-        clearBtn.onclick = () => {
-            if (confirm("Are you sure you want to clear the upload cache?")) {
-                localStorage.removeItem(STORAGE_KEY);
-                updateSyncStatus("🧹 Cache cleared.");
-            }
-        };
-
-        // Download cache button click
-        const downloadBtn = panel.querySelector('#download-cache-btn');
-        downloadBtn.onclick = () => {
-            const data = localStorage.getItem(STORAGE_KEY) || "{}";
-            const blob = new Blob([data], { type: "application/json" });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = "lightship_cache.json";
-            a.click();
-            URL.revokeObjectURL(url);
-        };
-
-        // Upload cache button click
-        const fileInput = panel.querySelector('#upload-cache-input');
-        const uploadBtn = panel.querySelector('#upload-cache-btn');
-
-        uploadBtn.onclick = () => fileInput.click();
-
-        fileInput.onchange = (e) => {
-            const file = e.target.files[0];
-            if (!file) return;
-            const reader = new FileReader();
-            reader.onload = function (event) {
-                try {
-                    const parsed = JSON.parse(event.target.result);
-                    if (typeof parsed === "object") {
-                        localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
-                        updateSyncStatus("✅ Cache imported.");
-                    } else {
-                        throw new Error("Invalid cache format");
-                    }
-                } catch (err) {
-                    console.error("Failed to import cache:", err);
-                    alert("❌ Failed to import cache: Invalid JSON.");
-                }
-            };
-            reader.readAsText(file);
         };
 
         // Preview button click
         const previewBtn = panel.querySelector('#preview-upload-btn');
         previewBtn.onclick = () => {
             const list = window.pendingNominationsToUpload || [];
+            const confirmedMatches = window.confirmedPotentialMatches || [];
+
             if (list.length === 0) {
                 alert("No nominations pending upload.");
                 return;
             }
 
-            const message = list.map((n, i) => `${i + 1}. ${n.title} (${n.reason})`).join("\n");
-            alert(`Nominations to be uploaded:\n\n${message}`);
+            const lines = list.map((n, i) => {
+                const match = confirmedMatches.find(m => m.newNominationId === n.id);
+                const replaced = match ? `, replaces potential: ${match.potentialId}` : "";
+                const statusChange = (n.reason === "status changed" && n.oldStatus && n.newStatus)
+                ? `: ${n.oldStatus} → ${n.newStatus}`
+                : "";
+                return `${i + 1}. ${n.title} (${n.reason}${statusChange}${replaced})`;
+            });
+
+            alert(`Nominations to be uploaded:\n\n${lines.join("\n")}`);
         };
 
         return {
@@ -305,6 +344,72 @@
                 syncBtn.disabled = !enabled;
             }
         };
+    }
+
+    async function showPotentialMatchUI(potentialMatches, nominations) {
+        return new Promise((resolve) => {
+            const panel = document.createElement('div');
+            panel.style.position = 'fixed';
+            panel.style.top = '10%';
+            panel.style.left = '10%';
+            panel.style.width = '80%';
+            panel.style.height = '70%';
+            panel.style.backgroundColor = '#fff';
+            panel.style.border = '2px solid #888';
+            panel.style.padding = '10px';
+            panel.style.overflow = 'auto';
+            panel.style.zIndex = 10000;
+
+            panel.innerHTML = `<h3>🔍 Potential Matches Found</h3>`;
+
+            const confirmed = [];
+
+            for (const newId of Object.keys(potentialMatches)) {
+                const nom = nominations.find(n => n.id === newId);
+                panel.innerHTML += `<hr><b>New Nomination:</b> ${nom.title}<ul>`;
+                potentialMatches[newId].forEach((pot, idx) => {
+                    const inputId = `match_${newId}_${pot.id}`;
+                    const groupName = `group_${newId}`;
+                    const lat = Number(pot.lat);
+                    const lng = Number(pot.lng);
+                    const latStr = isFinite(lat) ? lat.toFixed(5) : "N/A";
+                    const lngStr = isFinite(lng) ? lng.toFixed(5) : "N/A";
+
+                    panel.innerHTML += `
+                            <li>
+                                <label>
+                                    <input type="radio" name="${groupName}" id="${inputId}" ${idx === 0 ? "checked" : ""} />
+                                    Potential: ${pot.title} (${latStr}, ${lngStr})
+                                </label>
+                            </li>`;
+                });
+                panel.innerHTML += `</ul>`;
+            }
+
+            const confirmBtn = document.createElement('button');
+            confirmBtn.textContent = '✅ Confirm Selected Matches';
+            confirmBtn.onclick = () => {
+                for (const newId of Object.keys(potentialMatches)) {
+                    potentialMatches[newId].forEach((pot) => {
+                        const checkboxId = `match_${newId}_${pot.id}`;
+                        const checkbox = document.getElementById(checkboxId);
+                        const selected = potentialMatches[newId].find((pot) => {
+                            const inputId = `match_${newId}_${pot.id}`;
+                            const radio = document.getElementById(inputId);
+                            return radio && radio.checked;
+                        });
+                        if (selected) {
+                            confirmed.push({ newNominationId: newId, potentialId: selected.id });
+                        }
+                    });
+                }
+                document.body.removeChild(panel);
+                resolve(confirmed);
+            };
+
+            panel.appendChild(confirmBtn);
+            document.body.appendChild(panel);
+        });
     }
 
 
