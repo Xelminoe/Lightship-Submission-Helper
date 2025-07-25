@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Lightship Submission Helper
 // @author       Xelminoe
-// @version      1.1.01
+// @version      1.1.02
 // @description  Export Lightship nominations to Google Sheet (Wayfarer Exporter style)
 // @match        https://lightship.dev/account/geospatial-browser/*
 // @grant        none
@@ -237,9 +237,10 @@
                     const input = field?.querySelector("input, textarea");
                     if (input) {
                         input.focus();
-                        input.value = value;
+                        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                        nativeSetter?.call(input, value);
                         input.dispatchEvent(new Event("input", { bubbles: true }));
-                        console.log(`✅ Filled "${labelText}" with "${value}"`);
+                        //console.log(`✅ Filled "${labelText}" with "${value}"`);
                         return;
                     }
                 }
@@ -783,7 +784,7 @@
                 for (const [id, candidate] of Object.entries(stored)) {
                     if (candidate.status === "potential") {
                         const distance = getDistance(candidate, n);
-                        if (distance <= 5) {
+                        if (distance <= 10) {
                             matches.push({ id, ...candidate });
                         }
                     }
