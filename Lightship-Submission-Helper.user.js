@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Lightship Submission Helper
 // @author       Xelminoe
-// @version      1.1.0
+// @version      1.1.01
 // @description  Export Lightship nominations to Google Sheet (Wayfarer Exporter style)
 // @match        https://lightship.dev/account/geospatial-browser/*
 // @grant        none
@@ -162,19 +162,20 @@
     }
 
     function getCurrentNominatedCoordinates() {
-        const nodes = document.querySelectorAll('.copyableSection-0-2-249 .centerItem-0-2-241');
+        const card = document.querySelector("div[class*='card']");
+        if (!card) return null;
 
-        for (const el of nodes) {
-            const text = el.textContent.trim();
-            if (!text.match(/^-?\d{1,3}\.\d{3,},\s*-?\d{1,3}\.\d{3,}$/)) continue;
-
-            const [latStr, lngStr] = text.split(',').map(s => s.trim());
-            const lat = parseFloat(latStr);
-            const lng = parseFloat(lngStr);
-
-            if (!isFinite(lat) || !isFinite(lng)) continue;
-
-            return { lat, lng };
+        const candidateDivs = card.querySelectorAll("div");
+        for (const div of candidateDivs) {
+            const text = div.textContent.trim();
+            if (/^-?\d{1,3}\.\d{3,},\s*-?\d{1,3}\.\d{3,}$/.test(text)) {
+                const [latStr, lngStr] = text.split(',').map(s => s.trim());
+                const lat = parseFloat(latStr);
+                const lng = parseFloat(lngStr);
+                if (isFinite(lat) && isFinite(lng)) {
+                    return { lat, lng };
+                }
+            }
         }
 
         return null;
@@ -200,14 +201,24 @@
             if (modal === lastModalRef) return;
 
             // New modal appeared
-            const heading = modal?.querySelector('div.basicModalContent-0-2-288 > h3');
+            //const heading = modal?.querySelector('div.basicModalContent-0-2-288 > h3');
+            //const headingText = heading?.textContent?.trim();
+
+            //if (headingText === "Add Location Information") {
+            //  console.log("✅ Detected new nomination modal with form");
+            //  lastModalRef = modal;
+            //  handleNominationModalOpen(modal);
+            //}
+
+            const heading = modal?.querySelector('h2, h3');
             const headingText = heading?.textContent?.trim();
 
-            if (headingText === "Add Location Information") {
+            if (headingText === "Add Location Information" || headingText === "Create Public Location") {
                 console.log("✅ Detected new nomination modal with form");
                 lastModalRef = modal;
                 handleNominationModalOpen(modal);
             }
+
         });
 
         observer.observe(body, {
@@ -381,49 +392,33 @@
                                                                        c.lng >= bounds.sw.lng && c.lng <= bounds.ne.lng
                                                                       );
 
-        for (const c of candidatesInBounds) {
-            const screen = projectLngLatToScreen(c.lng, c.lat, bounds.center, bounds.zoom, bounds.width, bounds.height);
+        const markersWithScreen = candidatesInBounds.map(c => ({
+            candidate: c,
+            screen: projectLngLatToScreen(c.lng, c.lat, bounds.center, bounds.zoom, bounds.width, bounds.height)
+        }));
 
-            const el = document.createElement("div");
-            el.className = "poi-marker";
-            el.textContent = "📍";
-            el.style.position = "absolute";
-            el.style.left = `${screen.x}px`;
-            el.style.top = `${screen.y}px`;
-            el.style.fontSize = "30px";
-            el.style.transform = "translate(-50%, -100%)";
-            el.style.pointerEvents = "auto";
-            el.style.cursor = "pointer";
+        markersWithScreen.sort((a, b) => a.screen.y - b.screen.y);
 
-            container.appendChild(el);
+        for (const { candidate: c, screen } of markersWithScreen) {
+            const img = document.createElement("img");
+            img.src = "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-grey.png";
+            //img.style.width = "24px";
+            //img.style.height = "24px";
+            img.style.transform = "translate(-50%, -100%)";
+            img.style.pointerEvents = "auto";
+            img.style.cursor = "pointer";
+            img.title = c.title;
 
-            // create tooltip
-            const tooltip = document.createElement("div");
-            tooltip.textContent = `Click here to nominate "${c.title}"`;
-            tooltip.style.position = "absolute";
-            tooltip.style.bottom = "120%";
-            tooltip.style.left = "50%";
-            tooltip.style.transform = "translateX(-50%)";
-            tooltip.style.padding = "4px 8px";
-            tooltip.style.backgroundColor = "#333";
-            tooltip.style.color = "#fff";
-            tooltip.style.fontSize = "12px";
-            tooltip.style.borderRadius = "4px";
-            tooltip.style.whiteSpace = "nowrap";
-            tooltip.style.boxShadow = "0 0 4px rgba(0, 0, 0, 0.3)";
-            tooltip.style.opacity = "0";
-            tooltip.style.transition = "opacity 0.2s";
-            tooltip.style.pointerEvents = "none";
-            tooltip.style.zIndex = "9999";
+            // 将 img 包装在定位 div 中
+            const wrapper = document.createElement("div");
+            wrapper.className = "poi-marker";
+            wrapper.style.position = "absolute";
+            wrapper.style.left = `${screen.x}px`;
+            wrapper.style.top = `${screen.y}px`;
+            wrapper.appendChild(img);
 
-            el.appendChild(tooltip);
-
-            el.addEventListener("mouseenter", () => {
-                tooltip.style.opacity = "1";
-            });
-            el.addEventListener("mouseleave", () => {
-                tooltip.style.opacity = "0";
-            });
+            wrapper.appendChild(img);
+            container.appendChild(wrapper);
         }
 
         updateNominationStatus(`${candidatesInBounds.length} potential POIs in bounds.`);
@@ -536,6 +531,7 @@
             console.log("ℹ️ No matching POIs nearby.");
             return;
         }
+        console.log("Matching Candidates found. Injecting UI.");
 
         injectMatchSelectorUI(modal, matches);
     }
